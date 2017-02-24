@@ -1,0 +1,140 @@
+#!/bin/sh
+
+# print-selphy-postcard
+# 
+# Print postcard-sized (148x100mm, 5.8 x 3.9in) images
+# on a Canon Selphy CP1200 and compatible photo printers
+#
+# Usage: print-selphy-postcard [--border] <file>
+#
+# This script requires ImageMagick, GNU sed and other text processing
+# utilities, and CUPS.
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#  
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#  
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Configuration parameters:
+
+# Printer name
+# Set Wi-Fi printer name, as seen by CUPS.
+#
+# Corresponding printer entry in CUPS configuration should be something like:
+# dnssd://Canon%20SELPHY%20CP1200._ipp._tcp.local/?uuid=<uuid>
+#
+# To produce that entry for a new printer, use CUPS printer autodetection
+# (usually http://localhost:631 , Administration / Add Printer menu) while
+# mDNS service discovery is enabled.
+#
+PRINTER="Canon_SELPHY_CP1200"
+
+# End of configuration parameters.
+
+check="true"
+for ex in \
+ identify convert grep tr head lpq lpr
+  do
+    loc=`which "${ex}"`
+    if [ "${loc}" = "" ]
+      then
+        echo "${ex} is missing"
+        check="false"
+    fi
+done
+
+if [ "${check}" = "false" ]
+  then
+    echo "Some utilities are missing"
+    exit 1
+fi
+
+bordermaskfile=$(dirname $0)/card-border-mask.png
+if [ ! -f "${bordermaskfile}" ]
+  then
+    echo "card-border-mask.png file is missing"
+    exit 1
+fi
+
+lpq -P "${PRINTER}" >/dev/null 2>&1 || check="false"
+
+if [ "${check}" = "false" ]
+  then
+    echo "Can't check printer ${PRINTER} status"
+    exit 1
+fi
+
+imggeom="1024x640^"
+
+options=1
+border=0
+round=0
+
+while [ "${options}" = "1" ]
+do
+if [ "${1}" = "--round" ]
+  then
+    shift 1
+    round=1
+  else
+    if [ "${1}" = "--border" ]
+      then
+        shift 1
+        border=1
+        imggeom="974x590"
+      else
+        options=0
+    fi
+fi
+done
+
+if [ "${border}${round}" = "11" ]
+  then
+    imggeom="${imggeom}^"
+fi
+
+if [ -f "${1}" ]
+  then
+    if \
+    echo $(($(identify "${1}" | tr ' ' '\n' | \
+              grep '^[0-9]\+x[0-9]\+$' | \
+              head -n 1 | tr 'x' '-'))) | \
+    grep -q - 
+      then
+        rotateopt="-rotate" 
+        rot="90"
+      else
+        rotateopt=""
+        rot=""
+    fi
+
+    (
+    if [ "${round}" = "1" ]
+      then
+          convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+		  -filter Gaussian -resize "${imggeom}" \
+		  -gravity center -extent "1024x640" "${1}" png:- | \
+              composite "${bordermaskfile}" png:- png:- | \
+              convert -page "+34+8" -background white -flatten \
+		      -extent "1088x668" png:- -quality 97 jpg:-
+      else
+          convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+		  -filter Gaussian -resize "${imggeom}" \
+		  -gravity center -extent "1024x640" "${1}" png:- | \
+              convert -page "+34+8" -background white -flatten \
+		      -extent "1088x668" png:- -quality 97 jpg:- 
+    fi
+    ) | \
+	lpr -o raw -P "${PRINTER}"
+  else
+    echo "No input file" 1>&2
+    exit 1 
+fi
