@@ -65,12 +65,12 @@ if [ "${check}" = "false" ]
     exit 1
 fi
 
-imggeom="3288x2224^"
+imggeom="1760x1190^"
 
 if [ "${1}" = "--border" ]
   then
     shift 1
-    imggeom="3124x2113"
+    imggeom="1700x1130"
 fi
 
 if [ -f "${1}" ]
@@ -88,11 +88,12 @@ if [ -f "${1}" ]
         rot=""
     fi
 
-    convert ${rotateopt} ${rot} -resize "${imggeom}" \
-      -gravity center -extent "3288x2224" "${1}" png:- | \
-    convert -page "+90+140" -background white -flatten \
-      -extent "3508x2480" png:- -quality 97 jpg:- | \
-    lpr -o raw -P "${PRINTER}"
+    convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+	    -filter Gaussian -resize "${imggeom}" \
+	    -gravity center -extent "1760x1190" "${1}" png:- | \
+	convert -page "+46+34" -background white -flatten \
+		-extent "1872x1248" png:- -quality 97 jpg:- | \
+	lpr -o raw -P "${PRINTER}"
 
   else
     echo "No input file" 1>&2
