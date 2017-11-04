@@ -34,8 +34,8 @@
 usage () {
   #    0         1         2         3         4         5         6         7         8
   #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
-  echo "Usage: print-selphy [-b|--border] [-h|--help] [-p|--preview] [-r|--round]"
-  echo "                    [-P|--printer NAME]"
+  echo "Usage: print-selphy [-b|--border] [-c|--crop] [-f|--fit] [-h|--help]"
+  echo "                    [-p|--preview] [-r|--round] [-P|--printer NAME]"
   echo "                    <print type> <file1> [<file2> [<file3> ... ]]"
 }
 
@@ -56,6 +56,12 @@ print_help () {
   echo "Available options:"
   echo "  -b, --border        Print a white margin around the image."
   echo "                      This option is not available for stickers."
+  echo "  -c, --crop          If any image does not respect the expected aspect ratio,"
+  echo "                      it is croped to fill the page."
+  echo "                      The default behaviour is to ask for each image separately."
+  echo "  -f, --fit           If any image does not respect the expected aspect ratio,"
+  echo "                      it is scaled down to avoid cropping."
+  echo "                      The default behaviour is to ask for each image separately."
   echo "  -h, --help          Print this help"
   echo "  -p, --preview       Display a print preview instead of sending to printer."
   echo "                      Preview is displayed using Imagemagick 'display' command."
@@ -70,6 +76,7 @@ print_help () {
 
 ### Parse command line arguments
 
+global_crop=false
 crop=true
 preview=false
 border=false
@@ -80,42 +87,54 @@ POSITIONAL=()
 while [[ $# -gt 0 ]]
 do
   key="$1"
+
+  # Split options if they are grouped
+  if [[ "$key" =~ ^-[^-]. ]]
+    then
+      key=$(echo $key | sed 's/^-//;s/./-& /g')
+  fi
   
-  case "$key" in
-    -b|--border)
-      border=true
-      crop=false
-      shift # past argument
-      ;;
-    -h|--help)
-      print_help
-      exit 0
-      ;;
-    -p|--preview)
-      preview=true
-      shift # past argument
-      ;;
-    -P|--printer)
-      cups_printer_name="$2"
-      shift # past argument
-      shift # past value
-      ;;
-    -r|--round)
-      round=true
-      shift # past argument
-      ;;
-    *)    # unknown option
-      if [[ "$key" =~ ^- ]]
-        then
-          >&2 echo "unknown option '$key'"
-          usage
-          exit 1
-        else
-          POSITIONAL+=("$key") # save it in an array for later
-      fi
-      shift # past argument
-      ;;
-  esac
+  for k in $key
+    do
+      case "$k" in
+        -b|--border)
+          border=true
+          ;;
+        -c|--crop)
+          crop=true
+          global_crop=true
+          ;;
+        -f|--fit)
+          crop=false
+          global_crop=true
+          ;;
+        -h|--help)
+          print_help
+          exit 0
+          ;;
+        -p|--preview)
+          preview=true
+          ;;
+        -P|--printer)
+          cups_printer_name="$2"
+          shift # past value
+          ;;
+        -r|--round)
+          round=true
+          ;;
+        *)    # unknown option
+          if [[ "$k" =~ ^- ]]
+            then
+              >&2 echo "unknown option '$k'"
+              usage
+              exit 1
+            else
+              POSITIONAL+=("$k") # save it in an array for later
+          fi
+          ;;
+      esac
+  done
+  shift
 done
 set -- "${POSITIONAL[@]}" # restore positional parameters
 
@@ -230,11 +249,9 @@ while [ "$#" -gt 0 ]
         exit 1
     }
     [ "$img_width" -lt "$img_height" ] && portrait=true || portrait=false
-    [ "$print_type" == "stickers" ] && {
-        $portrait && rotate=false || rotate=true
-    } || {
-        $portrait && rotate=true || rotate=false
-    }
+    [ "$print_type" == "stickers" ] \
+        && { $portrait && rotate=false || rotate=true ; } \
+        || { $portrait && rotate=true || rotate=false ; }
     if $rotate
       then
         rotateopt="-rotate" 
@@ -246,7 +263,7 @@ while [ "$#" -gt 0 ]
 
     # Check aspect ratio (only if crop)
     $crop && this_crop=true || this_crop=false
-    if $this_crop
+    if $this_crop && ! $global_crop
     then
         $portrait \
             && ratio="${img_height}/${img_width}" \
@@ -256,11 +273,11 @@ while [ "$#" -gt 0 ]
           echo "Image $image aspect ratio does not seems to be ${expected_ratio}."
           while true
           do
-            echo -n "Crop, Resize, Abort? "
+            echo -n "Crop, Fit, Abort? "
             read answ
             case ${answ,,} in
               "c"|"crop") break ;;
-              "r"|"resize") this_crop=false; break ;;
+              "f"|"fit") this_crop=false; break ;;
               "a"|"abort") exit 1 ;;
               *) echo "Unknown answer" ;;
             esac
