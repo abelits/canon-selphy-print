@@ -35,59 +35,105 @@
 # (usually http://localhost:631 , Administration / Add Printer menu) while
 # mDNS service discovery is enabled.
 #
+
+usage () {
+  echo "Usage: print-selphy-postcard [-b|--border] [-p|--preview] <file>"
+}
+
+# Parse command line arguments
+imggeom="1760x1190"
+crop=true
+preview=false
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+  key="$1"
+  
+  case "$key" in
+    -b|--border)
+      imggeom="1700x1130"
+      crop=false
+      shift # past argument
+      ;;
+    -p|--preview)
+      preview=true
+      shift # past argument
+      ;;
+    *)    # unknown option
+      if [[ "$key" =~ ^- ]]
+        then
+          >&2 echo "unknown option '$key'"
+          usage
+          exit 1
+        else
+          POSITIONAL+=("$key") # save it in an array for later
+      fi
+      shift # past argument
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+if [ $# != 1 ]
+  then
+    >&2 echo "Not the expected number of arguments"
+    usage
+    exit 1
+fi
+
 PRINTER="Canon_SELPHY_CP1200"
 
 # End of configuration parameters.
 
-check="true"
+check=true
 for ex in \
- identify convert grep tr head lpq lpr bc
+ identify convert grep tr head lpq lpr bc display
   do
     loc=`which "${ex}"`
     if [ "${loc}" = "" ]
       then
-        echo "${ex} is missing"
-        check="false"
+        >&2 echo "${ex} is missing"
+        check=false
     fi
 done
 
-if [ "${check}" = "false" ]
+if ! ${check}
   then
-    echo "Some utilities are missing"
+    >&2 echo "Some utilities are missing"
     exit 1
 fi
 
-lpq -P "${PRINTER}" >/dev/null 2>&1 || check="false"
-
-if [ "${check}" = "false" ]
-  then
-    echo "Can't check printer ${PRINTER} status"
+$preview || lpq -P "${PRINTER}" >/dev/null 2>&1 || {
+    >&2 echo "Can't check printer ${PRINTER} status"
     exit 1
+}
+
+$preview \
+    && FINALCMD="display" \
+    || FINALCMD="lpr -o raw -P '${PRINTER}'"
+# Print
+
+if ! [ -f "${1}" ]
+  then
+    >&2 echo "Input file not found"
+    exit 1 
+fi
+if \
+echo $(($(identify "${1}" | tr ' ' '\n' | \
+          grep '^[0-9]\+x[0-9]\+$' | \
+          head -n 1 | tr 'x' '-'))) | \
+grep -q - 
+  then
+    rotateopt="-rotate" 
+    rot="90"
+  else
+    rotateopt=""
+    rot=""
 fi
 
-imggeom="1760x1190^"
-
-if [ "${1}" = "--border" ]
-  then
-    shift 1
-    imggeom="1700x1130"
-fi
-
-if [ -f "${1}" ]
-  then
-    if \
-    echo $(($(identify "${1}" | tr ' ' '\n' | \
-              grep '^[0-9]\+x[0-9]\+$' | \
-              head -n 1 | tr 'x' '-'))) | \
-    grep -q - 
-      then
-        rotateopt="-rotate" 
-        rot="90"
-      else
-        rotateopt=""
-        rot=""
-    fi
-
+if $crop
+then
     ratio=$(identify "${1}" | tr ' ' '\n' | \
             grep '^[0-9]\+x[0-9]\+$' | \
             head -n 1 | tr 'x' '/' | bc -l)
@@ -97,26 +143,27 @@ if [ -f "${1}" ]
     fi
     if ! [[ $ratio =~ ^0?\.667 ]]
     then
-      echo -n "Image aspect ratio does not seems to be 2/3. Continue? "
+      echo "Image aspect ratio does not seems to be 2/3."
       while true
       do
+        echo -n "Crop, Resize, Abort? "
         read answ
         case ${answ,,} in
-          "y"|"yes") break ;;
-          "n"|"no") exit 1 ;;
-          *) echo "Please use 'y' or 'n': " ;;
+          "c"|"crop") break ;;
+          "r"|"resize") crop=false; break ;;
+          "a"|"abort") exit 1 ;;
+          *) echo "Unknown answer" ;;
         esac
       done
     fi
-
-    convert ${rotateopt} ${rot} -define filter:blur=0.8 \
-	    -filter Gaussian -resize "${imggeom}" \
-	    -gravity center -extent "1760x1190" "${1}" png:- | \
-	convert -page "+46+34" -background white -flatten \
-		-extent "1872x1248" png:- -quality 97 jpg:- | \
-	lpr -o raw -P "${PRINTER}"
-
-  else
-    echo "No input file" 1>&2
-    exit 1 
 fi
+$crop && imggeom="$imggeom^"
+
+convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+    -filter Gaussian -resize "${imggeom}" \
+    -gravity center -extent "1760x1190" "${1}" png:- \
+| convert -page "+46+34" -background white -flatten \
+    -extent "1872x1248" png:- -quality 97 jpg:- \
+| $FINALCMD
+
+exit 0
