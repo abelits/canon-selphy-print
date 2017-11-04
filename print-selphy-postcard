@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # print-selphy-postcard
 # 
@@ -41,7 +41,7 @@ PRINTER="Canon_SELPHY_CP1200"
 
 check="true"
 for ex in \
- identify convert grep tr head lpq lpr
+ identify convert grep tr head lpq lpr bc
   do
     loc=`which "${ex}"`
     if [ "${loc}" = "" ]
@@ -86,6 +86,27 @@ if [ -f "${1}" ]
       else
         rotateopt=""
         rot=""
+    fi
+
+    ratio=$(identify "${1}" | tr ' ' '\n' | \
+            grep '^[0-9]\+x[0-9]\+$' | \
+            head -n 1 | tr 'x' '/' | bc -l)
+    if [ "$(echo "$ratio > 1" | bc -l)" != 0 ]
+    then
+      ratio=$(echo "1./$ratio" | bc -l)
+    fi
+    if ! [[ $ratio =~ ^0?\.667 ]]
+    then
+      echo -n "Image aspect ratio does not seems to be 2/3. Continue? "
+      while true
+      do
+        read answ
+        case ${answ,,} in
+          "y"|"yes") break ;;
+          "n"|"no") exit 1 ;;
+          *) echo "Please use 'y' or 'n': " ;;
+        esac
+      done
     fi
 
     convert ${rotateopt} ${rot} -define filter:blur=0.8 \
