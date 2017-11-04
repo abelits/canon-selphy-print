@@ -42,16 +42,18 @@
 usage () {
   #    0         1         2         3         4         5         6         7         8
   #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
-  echo "Usage: print-selphy-postcard [-b|--border] [-p|--preview]"
-  echo "                             [-P|--printer cups_printer_name] <file>"
+  echo "Usage: print-selphy [-b|--border] [-p|--preview]"
+  echo "                    [-P|--printer cups_printer_name]"
+  echo "                    <print type> <file>"
 }
 
 
 ### Parse command line arguments
 
-imggeom="1760x1190"
 crop=true
 preview=false
+border=false
+round=false
 cups_printer_name="Canon_SELPHY_CP1200"
 
 POSITIONAL=()
@@ -61,7 +63,7 @@ do
   
   case "$key" in
     -b|--border)
-      imggeom="1700x1130"
+      border=true
       crop=false
       shift # past argument
       ;;
@@ -73,6 +75,10 @@ do
       cups_printer_name="$2"
       shift # past argument
       shift # past value
+      ;;
+    -r|--round)
+      round=true
+      shift # past argument
       ;;
     *)    # unknown option
       if [[ "$key" =~ ^- ]]
@@ -89,26 +95,67 @@ do
 done
 set -- "${POSITIONAL[@]}" # restore positional parameters
 
-if [ $# != 1 ]
+if [ $# == 0 ]
   then
-    >&2 echo "Not the expected number of arguments"
     usage
     exit 1
 fi
-image="$1"
+
+# Check print type
+print_type="$1"
+shift
+if [ "$#" -lt 1 ]
+  then
+    >&2 echo "Need at least one image file"
+    exit 1
+fi
 
 ### Check configuration
 
+# Print type
+case $print_type in
+    "postcard")
+        $border && imggeom="1700x1130" || imggeom="1760x1190"
+        round=false # NB: round not suitable for postcards
+        page_shift="+46+34"
+        img_extent="1760x1190"
+        final_extent="1872x1248"
+        expected_ratio="3/2"
+        ;;
+    "card")
+        $border && imggeom="974x590" || imggeom="1024x640"
+        $border && $round && crop=true
+        page_shift="+34+8"
+        img_extent="1024x640"
+        final_extent="1088x668"
+        expected_ratio="8/5"
+        ;;
+    "stickers")
+        imggeom="216x270"
+        border=false
+        page_shift="+34+8"
+        img_extent="1024x640"
+        final_extent="1088x668"
+        expected_ratio="5/4"
+        tmpdir=$(mktemp -dp "/tmp" "selphy-print.XXXXXX") || {
+            >&2 echo "Cannot create tmp directory in /tmp"
+            exit 1
+        }
+        trap "exit 1" TERM HUP INT ERR
+        trap "[ -d $tmpdir ] && rm -f $tmpdir/t[1-8].png && rmdir $tmpdir" 0
+        ;;
+    *) >&2 echo "Unknown print type: $print_type"
+        exit 1 ;;
+esac
+ 
 check=true
 for ex in \
- identify convert grep tr head lpq lpr bc display
+ identify convert grep tr head lpq lpr bc display readlink cat tac
   do
-    loc=`which "${ex}"`
-    if [ "${loc}" = "" ]
-      then
+    which "${ex}" &>/dev/null || {
         >&2 echo "${ex} is missing"
         check=false
-    fi
+    }
 done
 
 if ! ${check}
@@ -116,6 +163,13 @@ if ! ${check}
     >&2 echo "Some utilities are missing"
     exit 1
 fi
+
+# Border mask
+bordermaskfile=$(dirname $(readlink -f $0))/card-border-mask.png
+$round && [ ! -f "${bordermaskfile}" ] && {
+    >&2 echo "File ${bordermaskfile} is missing"
+    exit 1
+}
 
 $preview || lpq -P "${cups_printer_name}" >/dev/null 2>&1 || {
     >&2 echo "Can't check printer ${cups_printer_name} status"
@@ -128,60 +182,119 @@ $preview \
 
 
 ### Check image
+ratio_tol="1"  # in pct  # TODO: check that this is suitable for all sizes
+final_quality=97
+n=0
+while [ "$#" -gt 0 ]
+  do
+    image="$1"
+    echo "Processing image ${image}..."
 
-# Does file exists?
-if ! [ -f "$image" ]
-  then
-    >&2 echo "Input file not found"
-    exit 1 
-fi
-
-# Portrait or landscape?
-if [ "$(($(identify "$image}" | tr ' ' '\n' \
-             | grep '^[0-9]\+x[0-9]\+$' \
-             | head -n 1 | tr 'x' '-')))" \
-    -lt 0 ]
-  then
-    rotateopt="-rotate" 
-    rot="90"
-  else
-    rotateopt=""
-    rot=""
-fi
-
-# Check aspect ratio (only if crop)
-if $crop
-then
-    ratio=$(identify "$image" | tr ' ' '\n' | \
-            grep '^[0-9]\+x[0-9]\+$' | \
-            head -n 1 | tr 'x' '/' | bc -l)
-    [ "$rot" == "90" ] && ratio=$(echo "1./$ratio" | bc -l)
-    if [ "$(echo "($ratio < 1.51) && ("$ratio" > 1.49)" | bc -l)" != 1 ]
-    then
-      echo "Image aspect ratio does not seems to be 2/3."
-      while true
-      do
-        echo -n "Crop, Resize, Abort? "
-        read answ
-        case ${answ,,} in
-          "c"|"crop") break ;;
-          "r"|"resize") crop=false; break ;;
-          "a"|"abort") exit 1 ;;
-          *) echo "Unknown answer" ;;
-        esac
-      done
+    # Does file exists?
+    if ! [ -f "$image" ]
+      then
+        >&2 echo "Image $image not found"
+        exit 1 
     fi
-fi
-$crop && imggeom="$imggeom^"
+
+    # Portrait or landscape?
+    read img_width img_height < <(identify -format "%w %h" "$image") || true
+    ( [ -z "$img_width" ] || [ -z "$img_height" ] ) && {
+        >&1 echo "Cannot read geometry of image $image"
+        exit 1
+    }
+    [ "$img_width" -lt "$img_height" ] && portrait=true || portrait=false
+    [ "$print_type" == "stickers" ] && {
+        $portrait && rotate=false || rotate=true
+    } || {
+        $portrait && rotate=true || rotate=false
+    }
+    if $rotate
+      then
+        rotateopt="-rotate" 
+        rot="90"
+      else
+        rotateopt=""
+        rot=""
+    fi
+
+    # Check aspect ratio (only if crop)
+    $crop && this_crop=true || this_crop=false
+    if $this_crop
+    then
+        $portrait \
+            && ratio="${img_height}/${img_width}" \
+            || ratio="${img_width}/${img_height}"
+        if [ "$(echo "($ratio < ($expected_ratio*(1+${ratio_tol}/100))) && ("$ratio" > ($expected_ratio*(1-${ratio_tol}/100)))" | bc -l)" != 1 ]
+        then
+          echo "Image $image aspect ratio does not seems to be ${expected_ratio}."
+          while true
+          do
+            echo -n "Crop, Resize, Abort? "
+            read answ
+            case ${answ,,} in
+              "c"|"crop") break ;;
+              "r"|"resize") this_crop=false; break ;;
+              "a"|"abort") exit 1 ;;
+              *) echo "Unknown answer" ;;
+            esac
+          done
+        fi
+    fi
+    this_imggeom="$imggeom"
+    $this_crop && this_imggeom="$this_imggeom^"
 
 
-### Convert, print or display
+    ### Convert, print or display
 
-convert ${rotateopt} ${rot} -define filter:blur=0.8 \
-    -filter Gaussian -resize "${imggeom}" \
-    -gravity center -extent "1760x1190" "$image" png:- \
-| convert -page "+46+34" -background white -flatten \
-    -extent "1872x1248" png:- -quality 97 jpg:- \
-| $print_or_preview
+    if [ "$print_type" == "stickers" ]
+    then
+        [ $n == 0 ] && rm -f ${tmpdir}/t[1-8].png
+        n=$((n+1))
+        convert ${rotateopt} ${rot} -resize "${this_imggeom}" \
+                -gravity center -extent "$imggeom" "$image" \
+                png:"${tmpdir}/t${n}.png"
+        # If we are on the last image, fill-up with copies up to 8 images
+        if [ $# == 1 ]
+          then
+            while [ "$n" -lt 8 ]
+              do
+                ln -s "${tmpdir}/t${n}.png" "${tmpdir}/t$((n+1)).png"
+                n=$((n+1))
+            done
+        fi
+        if [ $n == 8 ]
+          then
+            n=0
+            # Combine all files
+            convert -page "+44+35" -background white -flatten \
+                -extent "$img_extent" png:"${tmpdir}/t1.png" png:- \
+              | composite -geometry "+44+330"  png:"${tmpdir}/t2.png" png:- png:- \
+              | composite -geometry "+284+35"  png:"${tmpdir}/t3.png" png:- png:- \
+              | composite -geometry "+284+330" png:"${tmpdir}/t4.png" png:- png:- \
+              | composite -geometry "+524+35"  png:"${tmpdir}/t5.png" png:- png:- \
+              | composite -geometry "+524+330" png:"${tmpdir}/t6.png" png:- png:- \
+              | composite -geometry "+764+35"  png:"${tmpdir}/t7.png" png:- png:- \
+              | composite -geometry "+764+330" png:"${tmpdir}/t8.png" png:- png:- \
+              | convert -page "$page_shift" -background white -flatten \
+                  -extent "$final_extent" png:- -quality $final_quality jpg:- \
+              | $print_or_preview
+          else
+            # Process next file before doing anything
+            shift
+            continue
+        fi
+    else
+        convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+            -filter Gaussian -resize "${this_imggeom}" \
+            -gravity center -extent "$img_extent" "$image" png:- \
+          | ( $round && composite "${bordermaskfile}" png:- png:- || cat ) \
+          | convert -page "$page_shift" -background white -flatten \
+              -extent "$final_extent" png:- -quality $final_quality jpg:- \
+          | $print_or_preview
+    fi
+
+    shift
+done
 
 exit 0
