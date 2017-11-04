@@ -5,10 +5,7 @@
 # Print postcard-sized (148x100mm, 5.8 x 3.9in) images
 # on a Canon Selphy CP1200 and compatible photo printers
 #
-# Usage: print-selphy-postcard [--border] <file>
-#
-# This script requires ImageMagick, GNU sed and other text processing
-# utilities, and CUPS.
+# This script requires ImageMagick, and CUPS.
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -23,11 +20,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Configuration parameters:
-
-# Printer name
-# Set Wi-Fi printer name, as seen by CUPS.
-#
 # Corresponding printer entry in CUPS configuration should be something like:
 # dnssd://Canon%20SELPHY%20CP1200._ipp._tcp.local/?uuid=<uuid>
 #
@@ -42,9 +34,37 @@
 usage () {
   #    0         1         2         3         4         5         6         7         8
   #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
-  echo "Usage: print-selphy [-b|--border] [-p|--preview]"
-  echo "                    [-P|--printer cups_printer_name]"
-  echo "                    <print type> <file>"
+  echo "Usage: print-selphy [-b|--border] [-h|--help] [-p|--preview] [-r|--round]"
+  echo "                    [-P|--printer NAME]"
+  echo "                    <print type> <file1> [<file2> [<file3> ... ]]"
+}
+
+print_help () {
+  #    0         1         2         3         4         5         6         7         8
+  #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
+  usage
+  echo "Send images to a Canon Selphy printer."
+  echo
+  echo "<print type>     One of 'postcard', 'card' or 'stickers'."
+  echo "                 The paper in the printer must match."
+  echo "<file>           The image to print. Must be in a format handled by Imagemagick."
+  echo "                 If more than one file is provided, they are sent to the printer"
+  echo "                 one by one except for the 'stickers' type where they are"
+  echo "                 grouped by 8. If there are less than 8 images in the last group"
+  echo "                 the last one is repeated to fill the stickers card."
+  echo
+  echo "Available options:"
+  echo "  -b, --border        Print a white margin around the image."
+  echo "                      This option is not available for stickers."
+  echo "  -h, --help          Print this help"
+  echo "  -p, --preview       Display a print preview instead of sending to printer."
+  echo "                      Preview is displayed using Imagemagick 'display' command."
+  echo "                      Click on the image to show menu, press q to quit."
+  echo "  -P, --printer NAME  Set the Selphy printer name, as seen by CUPS."
+  echo "                      Defaults to $cups_printer_name"
+  echo "  -r, --round         Rounds the corners of the image. Available for cards only."
+  echo "                      This trims the image. Use --preview to see how much."
+  echo
 }
 
 
@@ -66,6 +86,10 @@ do
       border=true
       crop=false
       shift # past argument
+      ;;
+    -h|--help)
+      print_help
+      exit 0
       ;;
     -p|--preview)
       preview=true
@@ -110,29 +134,31 @@ if [ "$#" -lt 1 ]
     exit 1
 fi
 
+
 ### Check configuration
 
 # Print type
 case $print_type in
-    "postcard")
-        $border && imggeom="1700x1130" || imggeom="1760x1190"
+    "postcard") # 100x148 mm
+        $border && imggeom="1700x1130" || imggeom="1760x1190"  # border is 60px = 5 mm
         round=false # NB: round not suitable for postcards
         page_shift="+46+34"
         img_extent="1760x1190"
         final_extent="1872x1248"
         expected_ratio="3/2"
         ;;
-    "card")
-        $border && imggeom="974x590" || imggeom="1024x640"
-        $border && $round && crop=true
+    "card") # 54x86 mm
+        $border && imggeom="974x590" || imggeom="1024x640"  # border is 50px = 4 mm
+        $border && $round && crop=true  # when rounded, we want the picture to fill the frame
         page_shift="+34+8"
         img_extent="1024x640"
         final_extent="1088x668"
         expected_ratio="8/5"
         ;;
-    "stickers")
+    "stickers") # 8 per 54x86 mm page
         imggeom="216x270"
-        border=false
+        border=false # NB: no border for stickers
+        round=false # NB: round not suitable for stickers
         page_shift="+34+8"
         img_extent="1024x640"
         final_extent="1088x668"
@@ -150,7 +176,7 @@ esac
  
 check=true
 for ex in \
- identify convert grep tr head lpq lpr bc display readlink cat tac
+ identify convert lpq lpr bc display readlink cat
   do
     which "${ex}" &>/dev/null || {
         >&2 echo "${ex} is missing"
