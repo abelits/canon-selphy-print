@@ -37,13 +37,17 @@
 #
 
 usage () {
-  echo "Usage: print-selphy-postcard [-b|--border] [-p|--preview] <file>"
+  #    0         1         2         3         4         5         6         7         8
+  #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
+  echo "Usage: print-selphy-postcard [-b|--border] [-p|--preview]"
+  echo "                             [-P|--printer cups_printer_name] <file>"
 }
 
 # Parse command line arguments
 imggeom="1760x1190"
 crop=true
 preview=false
+cups_printer_name="Canon_SELPHY_CP1200"
 
 POSITIONAL=()
 while [[ $# -gt 0 ]]
@@ -59,6 +63,11 @@ do
     -p|--preview)
       preview=true
       shift # past argument
+      ;;
+    -P|--printer)
+      cups_printer_name="$2"
+      shift # past argument
+      shift # past value
       ;;
     *)    # unknown option
       if [[ "$key" =~ ^- ]]
@@ -82,8 +91,6 @@ if [ $# != 1 ]
     exit 1
 fi
 
-PRINTER="Canon_SELPHY_CP1200"
-
 # End of configuration parameters.
 
 check=true
@@ -104,14 +111,15 @@ if ! ${check}
     exit 1
 fi
 
-$preview || lpq -P "${PRINTER}" >/dev/null 2>&1 || {
-    >&2 echo "Can't check printer ${PRINTER} status"
+$preview || lpq -P "${cups_printer_name}" >/dev/null 2>&1 || {
+    >&2 echo "Can't check printer ${cups_printer_name} status"
     exit 1
 }
 
 $preview \
-    && FINALCMD="display" \
-    || FINALCMD="lpr -o raw -P '${PRINTER}'"
+    && print_or_preview="display" \
+    || print_or_preview="lpr -o raw -P '${cups_printer_name}'"
+
 # Print
 
 if ! [ -f "${1}" ]
@@ -119,11 +127,10 @@ if ! [ -f "${1}" ]
     >&2 echo "Input file not found"
     exit 1 
 fi
-if \
-echo $(($(identify "${1}" | tr ' ' '\n' | \
-          grep '^[0-9]\+x[0-9]\+$' | \
-          head -n 1 | tr 'x' '-'))) | \
-grep -q - 
+if echo $(($(identify "${1}" | tr ' ' '\n' \
+             | grep '^[0-9]\+x[0-9]\+$' \
+             | head -n 1 | tr 'x' '-'))) \
+    | grep -q - 
   then
     rotateopt="-rotate" 
     rot="90"
@@ -164,6 +171,6 @@ convert ${rotateopt} ${rot} -define filter:blur=0.8 \
     -gravity center -extent "1760x1190" "${1}" png:- \
 | convert -page "+46+34" -background white -flatten \
     -extent "1872x1248" png:- -quality 97 jpg:- \
-| $FINALCMD
+| $print_or_preview
 
 exit 0
