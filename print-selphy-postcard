@@ -95,7 +95,7 @@ if [ $# != 1 ]
     usage
     exit 1
 fi
-
+image="$1"
 
 ### Check configuration
 
@@ -130,14 +130,14 @@ $preview \
 ### Check image
 
 # Does file exists?
-if ! [ -f "${1}" ]
+if ! [ -f "$image" ]
   then
     >&2 echo "Input file not found"
     exit 1 
 fi
 
 # Portrait or landscape?
-if [ "$(($(identify "${1}" | tr ' ' '\n' \
+if [ "$(($(identify "$image}" | tr ' ' '\n' \
              | grep '^[0-9]\+x[0-9]\+$' \
              | head -n 1 | tr 'x' '-')))" \
     -lt 0 ]
@@ -152,7 +152,7 @@ fi
 # Check aspect ratio (only if crop)
 if $crop
 then
-    ratio=$(identify "${1}" | tr ' ' '\n' | \
+    ratio=$(identify "$image" | tr ' ' '\n' | \
             grep '^[0-9]\+x[0-9]\+$' | \
             head -n 1 | tr 'x' '/' | bc -l)
     [ "$rot" == "90" ] && ratio=$(echo "1./$ratio" | bc -l)
@@ -179,7 +179,7 @@ $crop && imggeom="$imggeom^"
 
 convert ${rotateopt} ${rot} -define filter:blur=0.8 \
     -filter Gaussian -resize "${imggeom}" \
-    -gravity center -extent "1760x1190" "${1}" png:- \
+    -gravity center -extent "1760x1190" "$image" png:- \
 | convert -page "+46+34" -background white -flatten \
     -extent "1872x1248" png:- -quality 97 jpg:- \
 | $print_or_preview
