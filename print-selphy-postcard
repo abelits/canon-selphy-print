@@ -127,10 +127,10 @@ if ! [ -f "${1}" ]
     >&2 echo "Input file not found"
     exit 1 
 fi
-if echo $(($(identify "${1}" | tr ' ' '\n' \
+if [ "$(($(identify "${1}" | tr ' ' '\n' \
              | grep '^[0-9]\+x[0-9]\+$' \
-             | head -n 1 | tr 'x' '-'))) \
-    | grep -q - 
+             | head -n 1 | tr 'x' '-')))" \
+    -lt 0 ]
   then
     rotateopt="-rotate" 
     rot="90"
@@ -144,11 +144,8 @@ then
     ratio=$(identify "${1}" | tr ' ' '\n' | \
             grep '^[0-9]\+x[0-9]\+$' | \
             head -n 1 | tr 'x' '/' | bc -l)
-    if [ "$(echo "$ratio > 1" | bc -l)" != 0 ]
-    then
-      ratio=$(echo "1./$ratio" | bc -l)
-    fi
-    if ! [[ $ratio =~ ^0?\.667 ]]
+    [ "$rot" == "90" ] && ratio=$(echo "1./$ratio" | bc -l)
+    if [ "$(echo "($ratio < 1.51) && ("$ratio" > 1.49)" | bc -l)" != 1 ]
     then
       echo "Image aspect ratio does not seems to be 2/3."
       while true
