@@ -36,6 +36,9 @@
 # mDNS service discovery is enabled.
 #
 
+
+### Usage and help
+
 usage () {
   #    0         1         2         3         4         5         6         7         8
   #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
@@ -43,7 +46,9 @@ usage () {
   echo "                             [-P|--printer cups_printer_name] <file>"
 }
 
-# Parse command line arguments
+
+### Parse command line arguments
+
 imggeom="1760x1190"
 crop=true
 preview=false
@@ -91,7 +96,8 @@ if [ $# != 1 ]
     exit 1
 fi
 
-# End of configuration parameters.
+
+### Check configuration
 
 check=true
 for ex in \
@@ -120,13 +126,17 @@ $preview \
     && print_or_preview="display" \
     || print_or_preview="lpr -o raw -P '${cups_printer_name}'"
 
-# Print
 
+### Check image
+
+# Does file exists?
 if ! [ -f "${1}" ]
   then
     >&2 echo "Input file not found"
     exit 1 
 fi
+
+# Portrait or landscape?
 if [ "$(($(identify "${1}" | tr ' ' '\n' \
              | grep '^[0-9]\+x[0-9]\+$' \
              | head -n 1 | tr 'x' '-')))" \
@@ -139,6 +149,7 @@ if [ "$(($(identify "${1}" | tr ' ' '\n' \
     rot=""
 fi
 
+# Check aspect ratio (only if crop)
 if $crop
 then
     ratio=$(identify "${1}" | tr ' ' '\n' | \
@@ -162,6 +173,9 @@ then
     fi
 fi
 $crop && imggeom="$imggeom^"
+
+
+### Convert, print or display
 
 convert ${rotateopt} ${rot} -define filter:blur=0.8 \
     -filter Gaussian -resize "${imggeom}" \
