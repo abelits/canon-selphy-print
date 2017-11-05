@@ -34,8 +34,8 @@
 usage () {
   #    0         1         2         3         4         5         6         7         8
   #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
-  echo "Usage: print-selphy [-b|--border] [-c|--crop] [-f|--fit] [-h|--help]"
-  echo "                    [-p|--preview] [-r|--round] [-P|--printer NAME]"
+  echo "Usage: print-selphy [-b|--border] [-c|--crop] [-f|--fit] [-g|--gravity VALUE]"
+  echo "                    [-h|--help] [-p|--preview] [-P|--printer NAME] [-r|--round]"
   echo "                    <print type> <file1> [<file2> [<file3> ... ]]"
 }
 
@@ -62,6 +62,10 @@ print_help () {
   echo "  -f, --fit           If any image does not respect the expected aspect ratio,"
   echo "                      it is scaled down to avoid cropping."
   echo "                      The default behaviour is to ask for each image separately."
+  echo "  -g, --gravity VALUE Set gravity used when resizing images (cf convert manpage)"
+  echo "                      Valid values are: NorthWest, North, NorthEast, West,"
+  echo "                      Center, East, SouthWest, South, SouthEast."
+  echo "                      Defaults to ${gravity}."
   echo "  -h, --help          Print this help"
   echo "  -p, --preview       Display a print preview instead of sending to printer."
   echo "                      Preview is displayed using Imagemagick 'display' command."
@@ -76,8 +80,9 @@ print_help () {
 
 ### Parse command line arguments
 
-global_crop=false
+gravity="Center"
 crop=true
+global_crop=false
 preview=false
 border=false
 round=false
@@ -107,6 +112,11 @@ do
         -f|--fit)
           crop=false
           global_crop=true
+          ;;
+        -g|--gravity)
+          gravity="$2"
+          global_gravity=true
+          shift # past value
           ;;
         -h|--help)
           print_help
@@ -295,7 +305,7 @@ while [ "$#" -gt 0 ]
         [ $n == 0 ] && rm -f ${tmpdir}/t[1-8].png
         n=$((n+1))
         convert ${rotateopt} ${rot} -resize "${this_imggeom}" \
-                -gravity center -extent "$imggeom" "$image" \
+                -gravity $gravity -extent "$imggeom" "$image" \
                 png:"${tmpdir}/t${n}.png"
         # If we are on the last image, fill-up with copies up to 8 images
         if [ $# == 1 ]
@@ -330,7 +340,7 @@ while [ "$#" -gt 0 ]
     else
         convert ${rotateopt} ${rot} -define filter:blur=0.8 \
             -filter Gaussian -resize "${this_imggeom}" \
-            -gravity center -extent "$img_extent" "$image" png:- \
+            -gravity $gravity -extent "$img_extent" "$image" png:- \
           | ( $round && composite "${bordermaskfile}" png:- png:- || cat ) \
           | convert -page "$page_shift" -background white -flatten \
               -extent "$final_extent" png:- -quality $final_quality jpg:- \
