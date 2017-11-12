@@ -1,0 +1,353 @@
+#!/bin/bash
+
+# print-selphy-postcard
+# 
+# Print postcard-sized (148x100mm, 5.8 x 3.9in) images
+# on a Canon Selphy CP1200 and compatible photo printers
+#
+# This script requires ImageMagick, and CUPS.
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+#  
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#  
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Corresponding printer entry in CUPS configuration should be something like:
+# dnssd://Canon%20SELPHY%20CP1200._ipp._tcp.local/?uuid=<uuid>
+#
+# To produce that entry for a new printer, use CUPS printer autodetection
+# (usually http://localhost:631 , Administration / Add Printer menu) while
+# mDNS service discovery is enabled.
+#
+
+
+### Usage and help
+
+usage () {
+  #    0         1         2         3         4         5         6         7         8
+  #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
+  echo "Usage: print-selphy [-b|--border] [-c|--crop] [-f|--fit] [-g|--gravity VALUE]"
+  echo "                    [-h|--help] [-p|--preview] [-P|--printer NAME] [-r|--round]"
+  echo "                    <print type> <file1> [<file2> [<file3> ... ]]"
+}
+
+print_help () {
+  #    0         1         2         3         4         5         6         7         8
+  #    012345678901234567890123456789012345678901234567890123456789012345678901234567890
+  usage
+  echo "Send images to a Canon Selphy printer."
+  echo
+  echo "<print type>     One of 'postcard', 'card' or 'stickers'."
+  echo "                 The paper in the printer must match."
+  echo "<file>           The image to print. Must be in a format handled by Imagemagick."
+  echo "                 If more than one file is provided, they are sent to the printer"
+  echo "                 one by one except for the 'stickers' type where they are"
+  echo "                 grouped by 8. If there are less than 8 images in the last group"
+  echo "                 the last one is repeated to fill the stickers card."
+  echo
+  echo "Available options:"
+  echo "  -b, --border        Print a white margin around the image."
+  echo "                      This option is not available for stickers."
+  echo "  -c, --crop          If any image does not respect the expected aspect ratio,"
+  echo "                      it is croped to fill the page."
+  echo "                      The default behaviour is to ask for each image separately."
+  echo "  -f, --fit           If any image does not respect the expected aspect ratio,"
+  echo "                      it is scaled down to avoid cropping."
+  echo "                      The default behaviour is to ask for each image separately."
+  echo "  -g, --gravity VALUE Set gravity used when resizing images (cf convert manpage)"
+  echo "                      Valid values are: NorthWest, North, NorthEast, West,"
+  echo "                      Center, East, SouthWest, South, SouthEast."
+  echo "                      Defaults to ${gravity}."
+  echo "  -h, --help          Print this help"
+  echo "  -p, --preview       Display a print preview instead of sending to printer."
+  echo "                      Preview is displayed using Imagemagick 'display' command."
+  echo "                      Click on the image to show menu, press q to quit."
+  echo "  -P, --printer NAME  Set the Selphy printer name, as seen by CUPS."
+  echo "                      Defaults to $cups_printer_name"
+  echo "  -r, --round         Rounds the corners of the image. Available for cards only."
+  echo "                      This trims the image. Use --preview to see how much."
+  echo
+}
+
+
+### Parse command line arguments
+
+gravity="Center"
+crop=true
+global_crop=false
+preview=false
+border=false
+round=false
+cups_printer_name="Canon_SELPHY_CP1200"
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]
+do
+  key="$1"
+
+  # Split options if they are grouped
+  if [[ "$key" =~ ^-[^-\ ]{2,} ]]
+    then
+      IFS=";" read -a key < <(echo $key | sed -r 's/^-//;s/./-&;/g')
+  fi
+  
+  for k in "${key[@]}"
+    do
+      case "$k" in
+        -b|--border)
+          border=true
+          ;;
+        -c|--crop)
+          crop=true
+          global_crop=true
+          ;;
+        -f|--fit)
+          crop=false
+          global_crop=true
+          ;;
+        -g|--gravity)
+          gravity="$2"
+          global_gravity=true
+          shift # past value
+          ;;
+        -h|--help)
+          print_help
+          exit 0
+          ;;
+        -p|--preview)
+          preview=true
+          ;;
+        -P|--printer)
+          cups_printer_name="$2"
+          shift # past value
+          ;;
+        -r|--round)
+          round=true
+          ;;
+        *)    # unknown option
+          if [[ "$k" =~ ^- ]]
+            then
+              >&2 echo "unknown option '$k'"
+              usage
+              exit 1
+            else
+              POSITIONAL+=("$k") # save it in an array for later
+          fi
+          ;;
+      esac
+  done
+  shift
+done
+set -- "${POSITIONAL[@]}" # restore positional parameters
+
+if [ $# == 0 ]
+  then
+    usage
+    exit 1
+fi
+
+# Check print type
+print_type="$1"
+shift
+if [ "$#" -lt 1 ]
+  then
+    >&2 echo "Need at least one image file"
+    exit 1
+fi
+
+
+### Check configuration
+
+# Print type
+case $print_type in
+    "postcard") # 100x148 mm
+        $border && imggeom="1700x1130" || imggeom="1760x1190"  # border is 60px = 5 mm
+        round=false # NB: round not suitable for postcards
+        page_shift="+46+34"
+        img_extent="1760x1190"
+        final_extent="1872x1248"
+        expected_ratio="3/2"
+        ;;
+    "card") # 54x86 mm
+        $border && imggeom="974x590" || imggeom="1024x640"  # border is 50px = 4 mm
+        $border && $round && crop=true  # when rounded, we want the picture to fill the frame
+        page_shift="+34+8"
+        img_extent="1024x640"
+        final_extent="1088x668"
+        expected_ratio="8/5"
+        ;;
+    "stickers") # 8 per 54x86 mm page
+        imggeom="216x270"
+        border=false # NB: no border for stickers
+        round=false # NB: round not suitable for stickers
+        page_shift="+34+8"
+        img_extent="1024x640"
+        final_extent="1088x668"
+        expected_ratio="5/4"
+        tmpdir=$(mktemp -dp "/tmp" "selphy-print.XXXXXX") || {
+            >&2 echo "Cannot create tmp directory in /tmp"
+            exit 1
+        }
+        trap "exit 1" TERM HUP INT ERR
+        trap "[ -d $tmpdir ] && rm -f $tmpdir/t[1-8].png && rmdir $tmpdir" 0
+        ;;
+    *) >&2 echo "Unknown print type: $print_type"
+        exit 1 ;;
+esac
+ 
+check=true
+for ex in \
+ identify convert lpq lpr bc display readlink cat
+  do
+    which "${ex}" &>/dev/null || {
+        >&2 echo "${ex} is missing"
+        check=false
+    }
+done
+
+if ! ${check}
+  then
+    >&2 echo "Some utilities are missing"
+    exit 1
+fi
+
+# Border mask
+bordermaskfile=$(dirname $(readlink -f $0))/card-border-mask.png
+$round && [ ! -f "${bordermaskfile}" ] && {
+    >&2 echo "File ${bordermaskfile} is missing"
+    exit 1
+}
+
+$preview || lpq -P "${cups_printer_name}" >/dev/null 2>&1 || {
+    >&2 echo "Can't check printer ${cups_printer_name} status"
+    exit 1
+}
+
+$preview \
+    && print_or_preview="display" \
+    || print_or_preview="lpr -o raw -P ${cups_printer_name}"
+
+
+### Check image
+ratio_tol="1"  # in pct  # TODO: check that this is suitable for all sizes
+final_quality=97
+n=0
+while [ "$#" -gt 0 ]
+  do
+    image="$1"
+    echo "Processing image ${image}..."
+
+    # Does file exists?
+    if ! [ -f "$image" ]
+      then
+        >&2 echo "Image $image not found"
+        exit 1 
+    fi
+
+    # Portrait or landscape?
+    read img_width img_height < <(identify -format "%w %h" "$image") || true
+    ( [ -z "$img_width" ] || [ -z "$img_height" ] ) && {
+        >&1 echo "Cannot read geometry of image $image"
+        exit 1
+    }
+    [ "$img_width" -lt "$img_height" ] && portrait=true || portrait=false
+    [ "$print_type" == "stickers" ] \
+        && { $portrait && rotate=false || rotate=true ; } \
+        || { $portrait && rotate=true || rotate=false ; }
+    if $rotate
+      then
+        rotateopt="-rotate" 
+        rot="90"
+      else
+        rotateopt=""
+        rot=""
+    fi
+
+    # Check aspect ratio (only if crop)
+    $crop && this_crop=true || this_crop=false
+    if $this_crop && ! $global_crop
+    then
+        $portrait \
+            && ratio="${img_height}/${img_width}" \
+            || ratio="${img_width}/${img_height}"
+        if [ "$(echo "($ratio < ($expected_ratio*(1+${ratio_tol}/100))) && ("$ratio" > ($expected_ratio*(1-${ratio_tol}/100)))" | bc -l)" != 1 ]
+        then
+          echo "Image $image aspect ratio does not seems to be ${expected_ratio}."
+          while true
+          do
+            echo -n "Crop, Fit, Abort? "
+            read answ
+            case ${answ,,} in
+              "c"|"crop") break ;;
+              "f"|"fit") this_crop=false; break ;;
+              "a"|"abort") exit 1 ;;
+              *) echo "Unknown answer" ;;
+            esac
+          done
+        fi
+    fi
+    this_imggeom="$imggeom"
+    $this_crop && this_imggeom="$this_imggeom^"
+
+
+    ### Convert, print or display
+
+    if [ "$print_type" == "stickers" ]
+    then
+        [ $n == 0 ] && rm -f ${tmpdir}/t[1-8].png
+        n=$((n+1))
+        convert ${rotateopt} ${rot} -resize "${this_imggeom}" \
+                -gravity $gravity -extent "$imggeom" "$image" \
+                png:"${tmpdir}/t${n}.png"
+        # If we are on the last image, fill-up with copies up to 8 images
+        if [ $# == 1 ]
+          then
+            while [ "$n" -lt 8 ]
+              do
+                ln -s "${tmpdir}/t${n}.png" "${tmpdir}/t$((n+1)).png"
+                n=$((n+1))
+            done
+        fi
+        if [ $n == 8 ]
+          then
+            n=0
+            # Combine all files
+            convert -page "+44+35" -background white -flatten \
+                -extent "$img_extent" png:"${tmpdir}/t1.png" png:- \
+              | composite -geometry "+44+330"  png:"${tmpdir}/t2.png" png:- png:- \
+              | composite -geometry "+284+35"  png:"${tmpdir}/t3.png" png:- png:- \
+              | composite -geometry "+284+330" png:"${tmpdir}/t4.png" png:- png:- \
+              | composite -geometry "+524+35"  png:"${tmpdir}/t5.png" png:- png:- \
+              | composite -geometry "+524+330" png:"${tmpdir}/t6.png" png:- png:- \
+              | composite -geometry "+764+35"  png:"${tmpdir}/t7.png" png:- png:- \
+              | composite -geometry "+764+330" png:"${tmpdir}/t8.png" png:- png:- \
+              | convert -page "$page_shift" -background white -flatten \
+                  -extent "$final_extent" png:- -quality $final_quality jpg:- \
+              | $print_or_preview
+          else
+            # Process next file before doing anything
+            shift
+            continue
+        fi
+    else
+        convert ${rotateopt} ${rot} -define filter:blur=0.8 \
+            -filter Gaussian -resize "${this_imggeom}" \
+            -gravity $gravity -extent "$img_extent" "$image" png:- \
+          | ( $round && composite "${bordermaskfile}" png:- png:- || cat ) \
+          | convert -page "$page_shift" -background white -flatten \
+              -extent "$final_extent" png:- -quality $final_quality jpg:- \
+          | $print_or_preview
+    fi
+
+    shift
+done
+
+exit 0
