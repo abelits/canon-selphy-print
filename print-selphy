@@ -233,7 +233,7 @@ $preview || lpq -P "${cups_printer_name}" >/dev/null 2>&1 || {
 
 $preview \
     && print_or_preview="display" \
-    || print_or_preview="lpr -o raw -P '${cups_printer_name}'"
+    || print_or_preview="lpr -o raw -P ${cups_printer_name}"
 
 
 ### Check image
