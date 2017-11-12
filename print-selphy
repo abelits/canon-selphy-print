@@ -94,12 +94,12 @@ do
   key="$1"
 
   # Split options if they are grouped
-  if [[ "$key" =~ ^-[^-]. ]]
+  if [[ "$key" =~ ^-[^-\ ]{2,} ]]
     then
-      key=$(echo $key | sed 's/^-//;s/./-& /g')
+      IFS=";" read -a key < <(echo $key | sed -r 's/^-//;s/./-&;/g')
   fi
   
-  for k in $key
+  for k in "${key[@]}"
     do
       case "$k" in
         -b|--border)
